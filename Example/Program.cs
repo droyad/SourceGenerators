@@ -14,7 +14,13 @@ var character = new Character("Bob", Class.Sourcerer, 100)
 };
 
 
-var readOnly = character.ToReadOnly();
+var readOnly = (IReadOnlyCharacter) character;
+
+//readOnly.Enchantments.Add(new Enchantment("bla"));
+var equipment = readOnly.GetEquipmentWithWearLessThan(50);
+
+foreach(var equipmentItem in equipment)
+    Console.WriteLine(equipmentItem.Name);
 
 Console.ReadLine();
 

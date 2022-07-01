@@ -27,8 +27,6 @@ public class ReadOnlySourceGenerator : ISourceGenerator
             .Where(ShouldBeMadeReadOnly)
             .ToArray();
 
-        GenerateExtensions(context, entitySymbols);
-
         foreach (var entitySymbol in entitySymbols)
             GenerateReadOnly(context, entitySymbol);
     }
@@ -44,73 +42,33 @@ public class ReadOnlySourceGenerator : ISourceGenerator
 
     public bool ShouldBeMadeReadOnly(ITypeSymbol symbol)
     {
-        // var iDomainInterface = symbol.AllInterfaces.FirstOrDefault(i => i.Name == "IDomain");
         var ns = symbol.ContainingNamespace.FullNamespace();
         return ns.StartsWith("Example.Domain") &&
                symbol.IsReferenceType &&
                !symbol.IsRecord;
     }
-    
-    private void GenerateExtensions(GeneratorExecutionContext context, ITypeSymbol[] entities)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("#nullable enable");
-        sb.AppendLine("namespace Example.Domain;");
-        sb.AppendLine();
-        sb.AppendLine("public static class ReadOnlyExtensions");
-        sb.AppendLine("{");
-
-        foreach (var entity in entities)
-        {
-            var ns = entity.ContainingNamespace.FullNamespace();
-            sb.AppendLine($"    public static {ns}.{entity.Name}ReadOnly ToReadOnly(this {ns}.{entity.Name} entity)");
-            sb.AppendLine($"        => new(");
-
-            var publicProperties = entity.PublicProperties().ToArray();
-            for (var i = 0; i < publicProperties.Length; i++)
-            {
-                var prop = publicProperties[i];
-                sb.Append($"            entity.{prop.Name}");
-
-                if (ShouldBeMadeReadOnly(prop.Type))
-                {
-                    if (prop.NullableAnnotation == NullableAnnotation.Annotated)
-                        sb.Append("?");
-
-                    sb.Append(".ToReadOnly()");
-                }
-
-                var iRol = prop.Type.AllInterfaces.FirstOrDefault(i => i.Name == "IReadOnlyList");
-                if (iRol != null && ShouldBeMadeReadOnly(iRol.TypeArguments[0]))
-                    sb.Append(".Select(e => e.ToReadOnly()).ToArray()");
-
-                if (i < publicProperties.Length - 1)
-                    sb.Append(",");
-                sb.AppendLine();
-            }
-
-            sb.AppendLine($"        );");
-        }
-
-        sb.AppendLine("}");
-
-        context.AddSource("ReadOnlyExtensions.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
-    }
 
 
     private void GenerateReadOnly(GeneratorExecutionContext context, ITypeSymbol entity)
     {
+        var publicProperties = entity.PublicProperties().ToArray();
+        var pureMethods = entity.GetMembers()
+            .OfType<IMethodSymbol>()
+            .Where(m => m.MethodKind == MethodKind.Ordinary)
+            .Where(m => m.DeclaredAccessibility.HasFlag(Accessibility.Public))
+            .Where(m => m.GetAttributes().Any(a => a.AttributeClass?.Name == "PureAttribute"))
+            .ToArray();
+
+
         var sb = new StringBuilder();
         sb.AppendLine("#nullable enable");
         sb.AppendLine("namespace Example.Domain;");
         sb.AppendLine();
-        sb.AppendLine($"public record {entity.Name}ReadOnly(");
 
-        var publicProperties = entity.PublicProperties().ToArray();
-        for (var i = 0; i < publicProperties.Length; i++)
+        sb.AppendLine($"public interface IReadOnly{entity.Name} {{");
+
+        foreach (var prop in publicProperties)
         {
-            var prop = publicProperties[i];
-
             sb.Append($"    ")
                 .Append(prop.Type.ContainingNamespace.FullNamespace())
                 .Append(".")
@@ -119,22 +77,136 @@ public class ReadOnlySourceGenerator : ISourceGenerator
             if (prop.NullableAnnotation == NullableAnnotation.Annotated)
                 sb.Append("?");
 
-            sb.Append(" ").Append(prop.Name);
-
-            if (i < publicProperties.Length - 1)
-                sb.Append(",");
-            sb.AppendLine();
+            sb.Append(" ")
+                .Append(prop.Name)
+                .AppendLine(" { get; }");
         }
 
-        sb.AppendLine(");");
+        foreach (var method in pureMethods)
+        {
+            sb.Append($"    ")
+                .Append(method.ReturnType.ContainingNamespace.FullNamespace())
+                .Append(".")
+                .Append(GetDesiredType(method.ReturnType));
 
-        context.AddSource($"{entity.Name}ReadOnly.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+            if (method.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+                sb.Append("?");
+
+            sb.Append(" ")
+                .Append(method.Name)
+                .AppendLine("(");
+
+            for (var index = 0; index < method.Parameters.Length; index++)
+            {
+                var param = method.Parameters[index];
+                sb.Append($"        ")
+                    .Append(param.Type.ContainingNamespace.FullNamespace())
+                    .Append(".")
+                    .Append(param.Type.Name);
+
+                if (param.Type.NullableAnnotation == NullableAnnotation.Annotated)
+                    sb.Append("?");
+
+                sb.Append(" ")
+                    .Append(param.Name);
+
+                if (index != method.Parameters.Length - 1)
+                    sb.Append(",");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("    );");
+        }
+
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        sb.AppendLine($"public partial class {entity.Name} : IReadOnly{entity.Name} {{");
+        sb.AppendLine();
+
+        foreach (var prop in publicProperties)
+        {
+            sb.Append($"    ")
+                .Append(prop.Type.ContainingNamespace.FullNamespace())
+                .Append(".")
+                .Append(GetDesiredType(prop.Type));
+
+            if (prop.NullableAnnotation == NullableAnnotation.Annotated)
+                sb.Append("?");
+
+            sb.Append(" IReadOnly")
+                .Append(entity.Name)
+                .Append(".")
+                .Append(prop.Name)
+                .Append(" => this.")
+                .Append(prop.Name)
+                .AppendLine(";");
+        }
+
+        foreach (var method in pureMethods)
+        {
+            sb.Append($"    ")
+                .Append(method.ReturnType.ContainingNamespace.FullNamespace())
+                .Append(".")
+                .Append(GetDesiredType(method.ReturnType));
+
+            if (method.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+                sb.Append("?");
+
+            sb.Append(" IReadOnly")
+                .Append(entity.Name)
+                .Append(".")
+                .Append(method.Name)
+                .AppendLine("(");
+
+            for (var index = 0; index < method.Parameters.Length; index++)
+            {
+                var param = method.Parameters[index];
+                sb.Append($"        ")
+                    .Append(param.Type.ContainingNamespace.FullNamespace())
+                    .Append(".")
+                    .Append(param.Type.Name);
+
+                if (param.Type.NullableAnnotation == NullableAnnotation.Annotated)
+                    sb.Append("?");
+
+                sb.Append(" ")
+                    .Append(param.Name);
+
+                if (index != method.Parameters.Length - 1)
+                    sb.Append(",");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("    )");
+
+            sb.Append("    => this.")
+                .Append(method.Name)
+                .AppendLine("(");
+                
+            for (var index = 0; index < method.Parameters.Length; index++)
+            {
+                var param = method.Parameters[index];
+                sb.Append($"        ")
+                    .Append(param.Name);
+
+                if (index != method.Parameters.Length - 1)
+                    sb.Append(",");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("    );");
+        }
+
+        sb.AppendLine("}");
+
+        context.AddSource($"IReadOnly{entity.Name}.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
     }
 
     private string GetDesiredType(ITypeSymbol propType)
     {
         if (ShouldBeMadeReadOnly(propType))
-            return propType.Name + "ReadOnly";
+            return "IReadOnly" + propType.Name;
 
         var iRol = propType.AllInterfaces.FirstOrDefault(i => i.Name == "IReadOnlyList");
         if (iRol != null)

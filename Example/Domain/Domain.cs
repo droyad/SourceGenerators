@@ -1,4 +1,6 @@
-﻿namespace Example.Domain;
+﻿using System.Diagnostics.Contracts;
+
+namespace Example.Domain;
 
 public enum Class
 {
@@ -7,7 +9,7 @@ public enum Class
     Paladin
 }
 
-public class Character
+public partial class Character
 {
     public Character(string name, Class @class, int hitPoints)
     {
@@ -22,9 +24,29 @@ public class Character
     public Equipment? LeftHand { get; set; }
     public Equipment? RightHand { get; set; }
     public List<Equipment> Inventory { get; } = new();
+
+    [Pure]
+    public List<Equipment> GetEquipmentWithWearLessThan(int wear)
+    {
+        // var result = Inventory.Count(i => i.WearLeft < wear);
+        // if (LeftHand != null && LeftHand.WearLeft < wear)
+        //     result++;
+        // if (RightHand != null && RightHand.WearLeft < wear)
+        //     result++;
+        //
+        // return result;
+
+        var result = Inventory.Where(i => i.WearLeft < wear).ToList();
+        if (LeftHand != null && LeftHand.WearLeft < wear)
+            result.Add(LeftHand);
+        if (RightHand != null && RightHand.WearLeft < wear)
+            result.Add(RightHand);
+
+        return result;
+    }
 }
 
-public class Equipment
+public partial class Equipment
 {
     public Equipment(string name, int wearLeft)
     {
